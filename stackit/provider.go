@@ -160,6 +160,7 @@ type providerModel struct {
 	EnableBetaResources             types.Bool   `tfsdk:"enable_beta_resources"`
 	ServiceEnablementCustomEndpoint types.String `tfsdk:"service_enablement_custom_endpoint"`
 	Experiments                     types.List   `tfsdk:"experiments"`
+	CliAuth                         types.Bool   `tfsdk:"cli_auth"`
 }
 
 // Schema defines the provider-level schema for configuration data.
@@ -203,6 +204,7 @@ func (p *Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *pro
 		"token_custom_endpoint":              "Custom endpoint for the token API, which is used to request access tokens when using the key flow",
 		"enable_beta_resources":              "Enable beta resources. Default is false.",
 		"experiments":                        fmt.Sprintf("Enables experiments. These are unstable features without official support. More information can be found in the README. Available Experiments: %v", strings.Join(features.AvailableExperiments, ", ")),
+		"cli_auth":                           "Enable authentication using STACKIT CLI credentials. When enabled, the provider will use credentials from 'stackit auth provider login' if no explicit service account credentials are provided. Default is false.",
 	}
 
 	resp.Schema = schema.Schema{
@@ -371,6 +373,10 @@ func (p *Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *pro
 				Optional:    true,
 				Description: descriptions["experiments"],
 			},
+			"cli_auth": schema.BoolAttribute{
+				Optional:    true,
+				Description: descriptions["cli_auth"],
+			},
 		},
 	}
 }
@@ -456,30 +462,34 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 
 	// Setup authentication with priority order:
 	// 1. Explicit provider configuration (service_account_key, token, etc.)
-	// 2. CLI provider credentials (if authenticated via STACKIT CLI)
+	// 2. CLI provider credentials (if cli_auth = true and authenticated via STACKIT CLI)
 	// 3. Environment variables and credentials file (handled by sdkauth.SetupAuth)
 	var roundTripper sdkauth.RoundTripperHandlerWithRetry
 	var err error
+
+	// Check if CLI auth is explicitly enabled
+	cliAuthEnabled := !providerConfig.CliAuth.IsNull() && !providerConfig.CliAuth.IsUnknown() && providerConfig.CliAuth.ValueBool()
 
 	// Check if explicit authentication is configured
 	hasExplicitAuth := (!providerConfig.ServiceAccountKey.IsNull() && !providerConfig.ServiceAccountKey.IsUnknown()) ||
 		(!providerConfig.ServiceAccountKeyPath.IsNull() && !providerConfig.ServiceAccountKeyPath.IsUnknown()) ||
 		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
 
-	if !hasExplicitAuth && cliAuth.IsProviderAuthenticated() {
-		// Use CLI authentication
-		cliRoundTripper, cliErr := cliAuth.ProviderAuthFlow(nil)
-		if cliErr == nil {
-			// Wrap the CLI RoundTripper in the SDK's retry handler
-			roundTripper = sdkauth.RoundTripperHandlerWithRetry{RoundTripper: cliRoundTripper}
-		} else {
-			// Fall back to SDK auth if CLI auth fails
-			roundTripper, err = sdkauth.SetupAuth(sdkConfig)
-			if err != nil {
-				core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Setting up authentication: %v (CLI auth error: %v)", err, cliErr))
-				return
-			}
+	if !hasExplicitAuth && cliAuthEnabled {
+		// CLI auth is explicitly enabled - try to use CLI credentials
+		if !cliAuth.IsProviderAuthenticated() {
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", "CLI authentication is enabled (cli_auth = true) but no CLI credentials found. Please run 'stackit auth provider login' first or provide explicit service account credentials.")
+			return
 		}
+
+		cliRoundTripper, cliErr := cliAuth.ProviderAuthFlow(nil)
+		if cliErr != nil {
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to initialize CLI authentication: %v", cliErr))
+			return
+		}
+
+		// Wrap the CLI RoundTripper in the SDK's retry handler
+		roundTripper = sdkauth.RoundTripperHandlerWithRetry{RoundTripper: cliRoundTripper}
 	} else {
 		// Use SDK authentication (explicit config, env vars, or credentials file)
 		roundTripper, err = sdkauth.SetupAuth(sdkConfig)
