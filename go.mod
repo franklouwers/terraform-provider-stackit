@@ -11,6 +11,7 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.29.0
 	github.com/hashicorp/terraform-plugin-log v0.10.0
 	github.com/hashicorp/terraform-plugin-testing v1.13.3
+	github.com/stackitcloud/stackit-cli v0.0.0-20251125162153-bfebe445230c
 	github.com/stackitcloud/stackit-sdk-go/core v0.19.0
 	github.com/stackitcloud/stackit-sdk-go/services/cdn v1.6.0
 	github.com/stackitcloud/stackit-sdk-go/services/dns v0.17.1
@@ -100,5 +101,7 @@ require (
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
+
+replace github.com/stackitcloud/stackit-cli => github.com/franklouwers/stackit-cli v0.0.0-20251125162153-bfebe445230c
 
 tool golang.org/x/tools/cmd/goimports

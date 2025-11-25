@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	cliAuth "github.com/stackitcloud/stackit-cli/pkg/auth"
 	sdkauth "github.com/stackitcloud/stackit-sdk-go/core/auth"
 	"github.com/stackitcloud/stackit-sdk-go/core/config"
 	"github.com/stackitcloud/terraform-provider-stackit/stackit/internal/core"
@@ -453,10 +454,39 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		providerData.Experiments = experimentValues
 	}
 
-	roundTripper, err := sdkauth.SetupAuth(sdkConfig)
-	if err != nil {
-		core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Setting up authentication: %v", err))
-		return
+	// Setup authentication with priority order:
+	// 1. Explicit provider configuration (service_account_key, token, etc.)
+	// 2. CLI provider credentials (if authenticated via STACKIT CLI)
+	// 3. Environment variables and credentials file (handled by sdkauth.SetupAuth)
+	var roundTripper sdkauth.RoundTripperHandlerWithRetry
+	var err error
+
+	// Check if explicit authentication is configured
+	hasExplicitAuth := (!providerConfig.ServiceAccountKey.IsNull() && !providerConfig.ServiceAccountKey.IsUnknown()) ||
+		(!providerConfig.ServiceAccountKeyPath.IsNull() && !providerConfig.ServiceAccountKeyPath.IsUnknown()) ||
+		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
+
+	if !hasExplicitAuth && cliAuth.IsProviderAuthenticated() {
+		// Use CLI authentication
+		cliRoundTripper, cliErr := cliAuth.ProviderAuthFlow(nil)
+		if cliErr == nil {
+			// Wrap the CLI RoundTripper in the SDK's retry handler
+			roundTripper = sdkauth.RoundTripperHandlerWithRetry{RoundTripper: cliRoundTripper}
+		} else {
+			// Fall back to SDK auth if CLI auth fails
+			roundTripper, err = sdkauth.SetupAuth(sdkConfig)
+			if err != nil {
+				core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Setting up authentication: %v (CLI auth error: %v)", err, cliErr))
+				return
+			}
+		}
+	} else {
+		// Use SDK authentication (explicit config, env vars, or credentials file)
+		roundTripper, err = sdkauth.SetupAuth(sdkConfig)
+		if err != nil {
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Setting up authentication: %v", err))
+			return
+		}
 	}
 
 	// Make round tripper and custom endpoints available during DataSource and Resource
