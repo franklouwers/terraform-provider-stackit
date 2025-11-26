@@ -475,11 +475,19 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
 
 	if !hasExplicitAuth && cliAuthEnabled {
-		// CLI auth is explicitly enabled - use SDK's WithCLIProviderAuth
-		// This configuration option checks for CLI credentials and sets up the RoundTripper
-		err = config.WithCLIProviderAuth()(sdkConfig)
+		// CLI auth is explicitly enabled - create adapter and check authentication
+		adapter := core.NewCLIAuthAdapter()
+
+		if !adapter.IsAuthenticated() {
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", "CLI authentication is enabled (cli_auth = true) but no CLI credentials found. Please run 'stackit auth provider login' first or provide explicit service account credentials.")
+			return
+		}
+
+		// Pass the adapter to SDK's WithCLIProviderAuth
+		// The adapter implements the CLIAuthProvider interface expected by the SDK
+		err = config.WithCLIProviderAuth(adapter)(sdkConfig)
 		if err != nil {
-			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("CLI authentication is enabled (cli_auth = true) but initialization failed: %v. Please run 'stackit auth provider login' first or provide explicit service account credentials.", err))
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to initialize CLI authentication: %v", err))
 			return
 		}
 	}
