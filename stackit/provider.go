@@ -475,21 +475,22 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
 
 	if !hasExplicitAuth && cliAuthEnabled {
-		// CLI auth is explicitly enabled - create adapter and check authentication
-		adapter := core.NewCLIAuthAdapter()
-
-		if !adapter.IsAuthenticated() {
+		// CLI auth is explicitly enabled - read credentials from CLI storage
+		if !core.IsAuthenticated() {
 			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", "CLI authentication is enabled (cli_auth = true) but no CLI credentials found. Please run 'stackit auth provider login' first or provide explicit service account credentials.")
 			return
 		}
 
-		// Pass the adapter to SDK's WithCLIProviderAuth
-		// The adapter implements the CLIAuthProvider interface expected by the SDK
-		err = config.WithCLIProviderAuth(adapter)(sdkConfig)
+		// Read CLI credentials from file
+		creds, err := core.ReadCLICredentials()
 		if err != nil {
-			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to initialize CLI authentication: %v", err))
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to read CLI credentials: %v", err))
 			return
 		}
+
+		// Use the access token from CLI credentials
+		// Note: Token refresh is handled by the CLI - users should re-run 'stackit auth provider login' if token expires
+		sdkConfig.Token = creds.AccessToken
 	}
 
 	// Setup authentication using the configured SDK
