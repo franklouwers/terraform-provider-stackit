@@ -469,7 +469,6 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 	// 1. Explicit provider configuration (service_account_key, token, etc.)
 	// 2. CLI provider credentials (if cli_auth = true and authenticated via STACKIT CLI)
 	// 3. Environment variables and credentials file (handled by sdkauth.SetupAuth)
-	var roundTripper sdkauth.RoundTripperHandlerWithRetry
 	var err error
 
 	// Check if CLI auth is explicitly enabled
@@ -512,7 +511,7 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 
 	// Setup authentication using the configured SDK
 	// This respects explicit credentials, CLI auth (if enabled), or env vars/credentials file
-	roundTripper, err = sdkauth.SetupAuth(sdkConfig)
+	roundTripper, err := sdkauth.SetupAuth(sdkConfig)
 	if err != nil {
 		core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Setting up authentication: %v", err))
 		return
