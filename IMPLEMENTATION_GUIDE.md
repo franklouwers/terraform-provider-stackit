@@ -1,22 +1,35 @@
 # CLI Provider Authentication - Implementation Guide
 
-This guide explains how to implement CLI provider authentication following the proposal architecture.
+This guide explains how to implement CLI provider authentication using an interface-based approach to avoid circular dependencies.
 
 ## Architecture Overview
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌────────────────────┐
-│  STACKIT    │────▶│  STACKIT     │────▶│   Terraform        │
-│  CLI        │     │  SDK         │     │   Provider         │
-│  (pkg/auth) │     │  (WithCLI..) │     │   (cli_auth=true)  │
-└─────────────┘     └──────────────┘     └────────────────────┘
+┌─────────────────────────────────────────────┐
+│ Terraform Provider (Integration Layer)      │
+│ - Imports CLI package                       │
+│ - Imports SDK package                       │
+│ - Creates CLIAuthAdapter implementation     │
+└─────────────────────────────────────────────┘
+            │                    │
+            │                    │
+            ▼                    ▼
+┌─────────────────┐    ┌─────────────────────┐
+│ STACKIT CLI     │    │ STACKIT SDK         │
+│ - Auth storage  │    │ - CLIAuthProvider   │
+│ - OAuth flows   │    │   interface         │
+│ - Token refresh │    │ - No CLI import     │
+└─────────────────┘    └─────────────────────┘
 ```
+
+**Key Concept:** The SDK defines a `CLIAuthProvider` interface but doesn't import the CLI. The Provider creates an adapter that implements this interface, bridging CLI and SDK without circular dependencies.
 
 **Flow:**
 1. User runs: `stackit auth provider login`
 2. CLI stores credentials (keyring or file)
-3. SDK provides `WithCLIProviderAuth()` wrapper
-4. Terraform Provider uses SDK's CLI auth option
+3. Provider creates `CLIAuthAdapter` implementing SDK's interface
+4. Adapter delegates to CLI's `pkg/auth` functions
+5. SDK receives interface, doesn't know about CLI implementation
 
 ## Implementation Steps
 
@@ -39,22 +52,9 @@ The CLI provides:
 ### Step 2: SDK Changes ⚠️ TODO
 
 **Repository:** `stackit-sdk-go` (needs fork)
-**What:** Add CLI authentication as standard auth method
+**What:** Add `CLIAuthProvider` interface (NO CLI dependency)
 
-#### 2.1 Add CLI Dependency
-
-**File:** `go.mod`
-
-```go
-require (
-    github.com/stackitcloud/stackit-cli v0.0.0-20251125162153-bfebe445230c
-    // ... other dependencies
-)
-
-replace github.com/stackitcloud/stackit-cli => github.com/franklouwers/stackit-cli v0.0.0-20251125162153-bfebe445230c
-```
-
-#### 2.2 Create CLI Auth Module
+#### 2.1 Define Interface
 
 **File:** `core/config/cli_auth.go`
 
@@ -63,27 +63,42 @@ package config
 
 import (
     "net/http"
-
-    cliAuth "github.com/stackitcloud/stackit-cli/pkg/auth"
 )
 
-// WithCLIProviderAuth configures authentication using STACKIT CLI provider credentials.
-// This uses credentials from 'stackit auth provider login' command.
+// CLIAuthProvider is an interface for CLI authentication providers.
+// Implementations should bridge to the STACKIT CLI without the SDK
+// needing to import the CLI package directly.
 //
-// Returns an error if:
-// - CLI provider credentials are not found (user hasn't run 'stackit auth provider login')
-// - Failed to initialize the authentication flow
+// This interface-based approach avoids circular dependencies:
+// - SDK defines the interface
+// - Consumer (e.g., Terraform Provider) implements it
+// - Consumer imports both SDK and CLI
+// - SDK never imports CLI
+type CLIAuthProvider interface {
+    // IsAuthenticated checks if CLI provider credentials exist
+    IsAuthenticated() bool
+
+    // GetAuthFlow returns an authenticated http.RoundTripper
+    // The RoundTripper should handle token refresh automatically
+    GetAuthFlow() (http.RoundTripper, error)
+}
+
+// WithCLIProviderAuth configures authentication using a CLI auth provider.
+// The provider parameter should implement the CLIAuthProvider interface.
 //
-// The CLI handles automatic token refresh and credential storage.
-func WithCLIProviderAuth() ConfigurationOption {
+// Example usage (in Terraform Provider):
+//   adapter := NewCLIAuthAdapter() // implements CLIAuthProvider
+//   config.WithCLIProviderAuth(adapter)(sdkConfig)
+func WithCLIProviderAuth(provider CLIAuthProvider) ConfigurationOption {
     return func(c *Configuration) error {
-        if !cliAuth.IsProviderAuthenticated() {
+        if provider == nil {
             return &AuthenticationError{
-                Message: "CLI provider authentication not found. Please run 'stackit auth provider login' first.",
+                Message: "CLI auth provider cannot be nil",
             }
         }
 
-        authFlow, err := cliAuth.ProviderAuthFlow(nil)
+        // Get the authenticated RoundTripper from the provider
+        authFlow, err := provider.GetAuthFlow()
         if err != nil {
             return &AuthenticationError{
                 Message: "Failed to initialize CLI authentication",
@@ -91,13 +106,9 @@ func WithCLIProviderAuth() ConfigurationOption {
             }
         }
 
+        // Use the CLI's RoundTripper as our custom auth
         return WithCustomAuth(authFlow)(c)
     }
-}
-
-// IsCLIProviderAuthenticated checks if CLI provider credentials are available.
-func IsCLIProviderAuthenticated() bool {
-    return cliAuth.IsProviderAuthenticated()
 }
 
 // AuthenticationError represents an error during authentication setup
@@ -118,76 +129,121 @@ func (e *AuthenticationError) Unwrap() error {
 }
 ```
 
-#### 2.3 Add Tests
+**Key Points:**
+- ✅ SDK defines interface only
+- ✅ NO import of CLI package
+- ✅ No circular dependency
+- ✅ Consumer implements interface
+
+#### 2.2 Add Tests
 
 **File:** `core/config/cli_auth_test.go`
 
 ```go
 package config
 
-import "testing"
+import (
+    "net/http"
+    "testing"
+)
 
-func TestWithCLIProviderAuth_NotAuthenticated(t *testing.T) {
+// mockCLIAuthProvider is a mock implementation for testing
+type mockCLIAuthProvider struct {
+    authenticated bool
+    err           error
+}
+
+func (m *mockCLIAuthProvider) IsAuthenticated() bool {
+    return m.authenticated
+}
+
+func (m *mockCLIAuthProvider) GetAuthFlow() (http.RoundTripper, error) {
+    if m.err != nil {
+        return nil, m.err
+    }
+    return http.DefaultTransport, nil
+}
+
+func TestWithCLIProviderAuth_Nil(t *testing.T) {
     config := &Configuration{}
-    err := WithCLIProviderAuth()(config)
+    err := WithCLIProviderAuth(nil)(config)
 
     if err == nil {
-        t.Error("Expected error when CLI provider not authenticated")
+        t.Error("Expected error with nil provider")
     }
 }
 
-func TestIsCLIProviderAuthenticated(t *testing.T) {
-    isAuth := IsCLIProviderAuthenticated()
-    t.Logf("CLI Provider Authenticated: %v", isAuth)
-}
-
-func TestWithCLIProviderAuth_Integration(t *testing.T) {
-    if !IsCLIProviderAuthenticated() {
-        t.Skip("Skipping: CLI provider not authenticated")
-    }
-
+func TestWithCLIProviderAuth_Success(t *testing.T) {
+    mock := &mockCLIAuthProvider{authenticated: true}
     config := &Configuration{}
-    err := WithCLIProviderAuth()(config)
 
+    err := WithCLIProviderAuth(mock)(config)
     if err != nil {
-        t.Errorf("Failed to configure CLI auth: %v", err)
+        t.Errorf("Unexpected error: %v", err)
     }
 
     if config.RoundTripper == nil {
         t.Error("Expected RoundTripper to be set")
     }
 }
+
+func TestWithCLIProviderAuth_Error(t *testing.T) {
+    mock := &mockCLIAuthProvider{
+        authenticated: true,
+        err:           fmt.Errorf("auth failed"),
+    }
+    config := &Configuration{}
+
+    err := WithCLIProviderAuth(mock)(config)
+    if err == nil {
+        t.Error("Expected error from auth flow")
+    }
+}
 ```
 
-#### 2.4 Update Documentation
+#### 2.3 Update Documentation
 
 **File:** `README.md` or `docs/authentication.md`
 
 ```markdown
 ## CLI Provider Authentication
 
-Authenticate using STACKIT CLI credentials:
+The SDK supports CLI authentication through the `CLIAuthProvider` interface.
+
+### Interface
 
 ```go
-import (
-    "github.com/stackitcloud/stackit-sdk-go/core/config"
-    "github.com/stackitcloud/stackit-sdk-go/services/dns"
-)
-
-func main() {
-    // Uses credentials from 'stackit auth provider login'
-    client, err := dns.NewAPIClient(
-        config.WithCLIProviderAuth(),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
+type CLIAuthProvider interface {
+    IsAuthenticated() bool
+    GetAuthFlow() (http.RoundTripper, error)
 }
 ```
 
-Prerequisites:
-- Run `stackit auth provider login` first
-- CLI handles automatic token refresh
+Consumers (like Terraform Provider) implement this interface to bridge
+to the STACKIT CLI without the SDK needing to import the CLI.
+
+### Usage in Consumers
+
+```go
+// Consumer implements the interface
+type CLIAuthAdapter struct {}
+
+func (a *CLIAuthAdapter) IsAuthenticated() bool {
+    return cliAuth.IsProviderAuthenticated()
+}
+
+func (a *CLIAuthAdapter) GetAuthFlow() (http.RoundTripper, error) {
+    return cliAuth.ProviderAuthFlow(nil)
+}
+
+// Use with SDK
+adapter := &CLIAuthAdapter{}
+client, err := dns.NewAPIClient(
+    config.WithCLIProviderAuth(adapter),
+)
+```
+
+See Terraform Provider implementation for complete example.
 ```
 
 **Status:** ⚠️ Needs implementation
@@ -201,24 +257,64 @@ Prerequisites:
 
 #### What Was Implemented:
 
-1. **Added `cli_auth` attribute** (`stackit/provider.go:163`)
+1. **CLI Auth Adapter** (`stackit/internal/core/cli_auth_adapter.go`)
+   ```go
+   package core
+
+   import (
+       "net/http"
+       cliAuth "github.com/stackitcloud/stackit-cli/pkg/auth"
+   )
+
+   // CLIAuthAdapter implements SDK's CLIAuthProvider interface
+   type CLIAuthAdapter struct{}
+
+   func NewCLIAuthAdapter() *CLIAuthAdapter {
+       return &CLIAuthAdapter{}
+   }
+
+   func (a *CLIAuthAdapter) IsAuthenticated() bool {
+       return cliAuth.IsProviderAuthenticated()
+   }
+
+   func (a *CLIAuthAdapter) GetAuthFlow() (http.RoundTripper, error) {
+       return cliAuth.ProviderAuthFlow(nil)
+   }
+   ```
+
+2. **Added `cli_auth` attribute** (`stackit/provider.go:162`)
    ```hcl
    provider "stackit" {
      cli_auth = true  # Explicit opt-in
    }
    ```
 
-2. **Authentication logic** (`stackit/provider.go:477-493`)
-   - Checks `cli_auth = true`
-   - Applies SDK's `config.WithCLIProviderAuth()`
-   - Falls back to traditional auth if CLI auth not enabled
+3. **Authentication logic** (`stackit/provider.go:477-493`)
+   ```go
+   if !hasExplicitAuth && cliAuthEnabled {
+       adapter := core.NewCLIAuthAdapter()
 
-3. **Priority order:**
+       if !adapter.IsAuthenticated() {
+           return Error("Please run 'stackit auth provider login'")
+       }
+
+       err = config.WithCLIProviderAuth(adapter)(sdkConfig)
+   }
+   ```
+
+4. **Priority order:**
    1. Explicit credentials (service_account_key, token)
    2. CLI auth (when `cli_auth = true`)
    3. Environment variables / credentials file
 
-**Status:** ✅ Complete (pending SDK support)
+**Key Design Decisions:**
+- ✅ Adapter pattern avoids circular dependencies
+- ✅ Provider imports both CLI and SDK
+- ✅ SDK never imports CLI
+- ✅ Clear error messages
+- ✅ Explicit opt-in required
+
+**Status:** ✅ Complete (pending SDK interface support)
 
 ---
 
@@ -322,25 +418,36 @@ export STACKIT_PROJECT_ID="your-project-id"
 
 ## Benefits of This Architecture
 
+### ✅ No Circular Dependencies
+- SDK defines interface, doesn't import CLI
+- Provider implements interface and imports both
+- Clean dependency graph:
+  - CLI: No dependencies on SDK or Provider
+  - SDK: No dependencies on CLI or Provider
+  - Provider: Depends on both CLI and SDK
+
 ### ✅ Proper Layering
 - CLI provides auth primitives
-- SDK provides auth integration
-- Provider uses SDK's standard API
+- SDK provides interface contract
+- Provider bridges the two
 
 ### ✅ Reusability
-- Any SDK user can use `WithCLIProviderAuth()`
+- Any SDK user can implement `CLIAuthProvider`
 - Not limited to Terraform
-- Go applications, scripts, etc.
+- Works with any Go application
+- Interface can support multiple CLI implementations
 
 ### ✅ Maintainability
-- CLI changes don't affect Provider
-- SDK abstracts CLI implementation details
+- CLI changes don't break SDK
+- SDK changes to interface are backwards compatible
+- Provider adapter is ~15 lines of code
 - Clear separation of concerns
 
 ### ✅ Testability
-- Each layer can be tested independently
-- SDK can mock CLI auth
-- Provider tests use SDK mocks
+- SDK can be tested with mock implementations
+- Provider adapter is trivial to test
+- No need for CLI in SDK tests
+- Integration tests can use real CLI
 
 ---
 
