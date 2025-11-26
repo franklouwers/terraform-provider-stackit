@@ -12,25 +12,25 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.10.0
 	github.com/hashicorp/terraform-plugin-testing v1.13.3
 	github.com/stackitcloud/stackit-cli v0.0.0-20251125162153-bfebe445230c
-	github.com/stackitcloud/stackit-sdk-go/core v0.19.0
+	github.com/stackitcloud/stackit-sdk-go/core v0.20.0
 	github.com/stackitcloud/stackit-sdk-go/services/cdn v1.6.0
 	github.com/stackitcloud/stackit-sdk-go/services/dns v0.17.1
-	github.com/stackitcloud/stackit-sdk-go/services/git v0.8.0
-	github.com/stackitcloud/stackit-sdk-go/services/iaas v0.31.0
+	github.com/stackitcloud/stackit-sdk-go/services/git v0.9.1
+	github.com/stackitcloud/stackit-sdk-go/services/iaas v1.2.0
 	github.com/stackitcloud/stackit-sdk-go/services/iaasalpha v0.1.21-alpha
-	github.com/stackitcloud/stackit-sdk-go/services/kms v1.0.0
+	github.com/stackitcloud/stackit-sdk-go/services/kms v1.1.1
 	github.com/stackitcloud/stackit-sdk-go/services/loadbalancer v1.6.0
-	github.com/stackitcloud/stackit-sdk-go/services/logme v0.25.1
+	github.com/stackitcloud/stackit-sdk-go/services/logme v0.25.2
 	github.com/stackitcloud/stackit-sdk-go/services/mariadb v0.25.1
 	github.com/stackitcloud/stackit-sdk-go/services/modelserving v0.6.0
 	github.com/stackitcloud/stackit-sdk-go/services/mongodbflex v1.5.2
-	github.com/stackitcloud/stackit-sdk-go/services/objectstorage v1.4.0
-	github.com/stackitcloud/stackit-sdk-go/services/observability v0.15.0
-	github.com/stackitcloud/stackit-sdk-go/services/opensearch v0.24.1
+	github.com/stackitcloud/stackit-sdk-go/services/objectstorage v1.4.1
+	github.com/stackitcloud/stackit-sdk-go/services/observability v0.15.1
+	github.com/stackitcloud/stackit-sdk-go/services/opensearch v0.24.2
 	github.com/stackitcloud/stackit-sdk-go/services/postgresflex v1.2.1
 	github.com/stackitcloud/stackit-sdk-go/services/rabbitmq v0.25.1
 	github.com/stackitcloud/stackit-sdk-go/services/redis v0.25.1
-	github.com/stackitcloud/stackit-sdk-go/services/resourcemanager v0.17.1
+	github.com/stackitcloud/stackit-sdk-go/services/resourcemanager v0.18.0
 	github.com/stackitcloud/stackit-sdk-go/services/scf v0.2.1
 	github.com/stackitcloud/stackit-sdk-go/services/secretsmanager v0.13.1
 	github.com/stackitcloud/stackit-sdk-go/services/serverbackup v1.3.2
@@ -38,14 +38,36 @@ require (
 	github.com/stackitcloud/stackit-sdk-go/services/serviceaccount v0.11.1
 	github.com/stackitcloud/stackit-sdk-go/services/serviceenablement v1.2.2
 	github.com/stackitcloud/stackit-sdk-go/services/ske v1.4.0
-	github.com/stackitcloud/stackit-sdk-go/services/sqlserverflex v1.3.1
+	github.com/stackitcloud/stackit-sdk-go/services/sqlserverflex v1.3.2
 	github.com/teambition/rrule-go v1.8.2
 	golang.org/x/mod v0.30.0
 )
 
 require (
+	al.essio.dev/pkg/shellescape v1.5.1 // indirect
+	github.com/danieljoos/wincred v1.2.2 // indirect
+	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/goccy/go-yaml v1.18.0 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
+	github.com/lmittmann/tint v1.1.2 // indirect
+	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/sagikazarmark/locafero v0.11.0 // indirect
+	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
+	github.com/spf13/afero v1.15.0 // indirect
+	github.com/spf13/cast v1.10.0 // indirect
+	github.com/spf13/cobra v1.10.1 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/viper v1.21.0 // indirect
+	github.com/subosito/gotenv v1.6.0 // indirect
+	github.com/zalando/go-keyring v0.2.6 // indirect
+	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/oauth2 v0.33.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54 // indirect
+	golang.org/x/term v0.37.0 // indirect
 )
 
 require (
@@ -74,7 +96,6 @@ require (
 	github.com/hashicorp/terraform-registry-address v0.4.0 // indirect
 	github.com/hashicorp/terraform-svchost v0.1.1 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
@@ -83,7 +104,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/oklog/run v1.2.0 // indirect
-	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/stackitcloud/stackit-sdk-go/services/authorization v0.9.0
 	github.com/vmihailenco/msgpack v4.0.4+incompatible // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -105,7 +125,7 @@ require (
 // Use CLI fork with provider authentication support
 replace github.com/stackitcloud/stackit-cli => github.com/franklouwers/stackit-cli v0.0.0-20251125162153-bfebe445230c
 
-// TODO: Replace with SDK fork that includes CLIAuthProvider interface
-// replace github.com/stackitcloud/stackit-sdk-go/core => github.com/franklouwers/stackit-sdk-go/core v0.0.0-XXXXXX
+// SDK fork that includes CLIAuthProvider interface
+replace github.com/stackitcloud/stackit-sdk-go/core => github.com/franklouwers/stackit-sdk-go/core v0.0.0-20251126081504-5adc5b41b970
 
 tool golang.org/x/tools/cmd/goimports
