@@ -9,14 +9,18 @@ Provider → SDK v0.Y.Y
 ```
 This caused impossible-to-resolve version conflicts between the CLI's SDK version and the Provider's SDK version.
 
-## New Architecture: File-Based Credential Sharing
+## New Architecture: Secure Credential Sharing
 
-The CLI and Provider now communicate through a **shared credential file**, similar to AWS CLI and Terraform:
+The CLI and Provider now communicate through **shared credential storage** (no code dependencies):
 
 ```
-CLI → SDK (stores credentials to ~/.stackit/provider-credentials.json)
-Provider → SDK (reads ~/.stackit/provider-credentials.json)
+CLI → SDK (stores credentials in keychain or file)
+Provider → SDK (reads credentials from keychain or file)
 ```
+
+**Storage Priority:**
+1. **Primary:** System keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service)
+2. **Fallback:** JSON file at `~/.stackit/provider-credentials.json`
 
 **Zero code dependencies** between CLI and Provider!
 
@@ -30,8 +34,11 @@ Provider → SDK (reads ~/.stackit/provider-credentials.json)
 
 ### 2. New Credential Reader (`stackit/internal/core/cli_credentials.go`)
 
-Simple file-based credential reader:
-- Reads from `~/.stackit/provider-credentials.json` (or `$STACKIT_CLI_CONFIG_DIR/provider-credentials.json`)
+Secure credential reader with keychain support:
+- **Primary:** Reads from system keychain using `github.com/zalando/go-keyring`
+  - Service: `stackit-cli`
+  - Key: `provider-credentials`
+- **Fallback:** Reads from `~/.stackit/provider-credentials.json` (or `$STACKIT_CLI_CONFIG_DIR/provider-credentials.json`)
 - Parses OAuth credentials (access_token, refresh_token, expiry)
 - Validates credentials exist before use
 
@@ -42,17 +49,28 @@ type ProviderCredentials struct {
     Expiry       time.Time `json:"expiry"`
     TokenType    string    `json:"token_type,omitempty"`
 }
+
+const (
+    keychainService = "stackit-cli"
+    keychainProviderKey = "provider-credentials"
+)
 ```
+
+**Cross-Platform Keychain Support:**
+- **Windows:** Windows Credential Manager
+- **macOS:** Keychain
+- **Linux:** Secret Service (gnome-keyring, KWallet, etc.)
 
 ### 3. Updated Provider Logic (`stackit/provider.go`)
 
 Simplified authentication flow:
 ```go
 if !hasExplicitAuth && cliAuthEnabled {
-    // Read credentials from file (no CLI code dependency!)
+    // Read credentials from keychain or file (no CLI code dependency!)
+    // Automatically tries keychain first, falls back to file
     creds, err := core.ReadCLICredentials()
     if err != nil {
-        // Error: CLI credentials not found
+        // Error: CLI credentials not found in keychain or file
         return
     }
 
@@ -70,7 +88,9 @@ if !hasExplicitAuth && cliAuthEnabled {
    ```bash
    stackit auth provider login
    ```
-   → CLI performs OAuth flow and stores credentials to `~/.stackit/provider-credentials.json`
+   → CLI performs OAuth flow and stores credentials:
+   - **Primary:** System keychain (encrypted, secure)
+   - **Fallback:** `~/.stackit/provider-credentials.json` (if keychain unavailable)
 
 2. **Provider reads credentials:**
    ```hcl
@@ -78,12 +98,12 @@ if !hasExplicitAuth && cliAuthEnabled {
      cli_auth = true  # Enable CLI authentication
    }
    ```
-   → Provider reads token from file and uses it with SDK
+   → Provider reads token from keychain (or file fallback) and uses it with SDK
 
 3. **No version conflicts!**
    - CLI can use any SDK version it needs
    - Provider can use any SDK version it needs
-   - They only share a JSON file format
+   - They only share a storage format (keychain keys + JSON structure)
 
 ## Token Refresh
 
@@ -115,7 +135,25 @@ go test ./...
 
 ## Next Steps for CLI
 
-The CLI needs to store credentials in the agreed-upon format:
+The CLI needs to store credentials matching the provider's expectations:
+
+### Primary Storage: System Keychain
+
+**Keychain Details:**
+- Service: `stackit-cli`
+- Key: `provider-credentials`
+- Value: JSON string with credentials
+
+**Using go-keyring:**
+```go
+import "github.com/zalando/go-keyring"
+
+// Store credentials
+credsJSON := `{"access_token": "...", "refresh_token": "...", "expiry": "2025-11-27T10:30:00Z"}`
+err := keyring.Set("stackit-cli", "provider-credentials", credsJSON)
+```
+
+### Fallback Storage: JSON File
 
 **Location:** `~/.stackit/provider-credentials.json` (or `$STACKIT_CLI_CONFIG_DIR/provider-credentials.json`)
 
@@ -129,23 +167,36 @@ The CLI needs to store credentials in the agreed-upon format:
 }
 ```
 
+### CLI Implementation Checklist
+
 The CLI's `stackit auth provider login` command should:
-1. Perform OAuth flow (already implemented in your fork)
-2. Write credentials to the file above in JSON format
-3. Set appropriate file permissions (0600 - owner read/write only)
+1. ✅ Perform OAuth flow (already implemented in your fork)
+2. ✅ Try to store credentials in system keychain first
+3. ✅ Fall back to JSON file if keychain is unavailable
+4. ✅ Use same keychain service/key names: `stackit-cli` / `provider-credentials`
+5. ✅ Store credentials as JSON string in both keychain and file
+6. ✅ Set appropriate file permissions (0600 - owner read/write only) for file fallback
 
 ## Benefits
 
 ✅ **No version conflicts** - CLI and Provider are independent
 ✅ **No circular dependencies** - Clean separation
 ✅ **No SDK forks needed** - Use standard released versions
+✅ **Secure storage** - Uses OS-native encrypted keychain
+✅ **Cross-platform** - Works on Windows, macOS, and Linux
 ✅ **Standard pattern** - Same as AWS/Azure/GCP CLIs
 ✅ **Simpler testing** - No complex dependency graphs
 ✅ **Easier maintenance** - Changes to CLI don't affect Provider
+✅ **Graceful fallback** - File storage works when keychain is unavailable
 
 ## Comparison to AWS CLI
 
 This is exactly how AWS does it:
-- AWS CLI: `aws sso login` → Writes to `~/.aws/sso/cache/`
+- AWS CLI: `aws sso login` → Writes to `~/.aws/sso/cache/` (file-based)
 - Terraform AWS Provider: Reads from `~/.aws/sso/cache/`
 - No code dependency between aws-cli and terraform-provider-aws!
+
+**Our implementation is even better:**
+- We use **encrypted keychain** as primary storage (more secure than AWS's approach)
+- We fall back to file storage for compatibility
+- Same zero-dependency pattern
