@@ -1,4 +1,4 @@
-# CLI Authentication Refactored - No More Dependency Conflicts!
+# CLI Authentication Integration - Complete Implementation
 
 ## Problem Solved ✅
 
@@ -16,11 +16,14 @@ The CLI and Provider now communicate through **shared credential storage** (no c
 ```
 CLI → SDK (stores credentials in keychain or file)
 Provider → SDK (reads credentials from keychain or file)
+Provider → Can refresh tokens and write back
 ```
 
-**Storage Priority:**
-1. **Primary:** System keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service)
-2. **Fallback:** JSON file at `~/.stackit/provider-credentials.json`
+**Storage Format (matches CLI exactly):**
+1. **Primary:** System keychain - stores each field separately
+   - Service: `stackit-cli-provider` (default) or `stackit-cli-provider/{profile}`
+   - Keys: `access_token`, `refresh_token`, `user_email`, `session_expires_at_unix`, `auth_flow_type`
+2. **Fallback:** Base64-encoded JSON file at `~/.stackit/cli-provider-auth-storage.txt`
 
 **Zero code dependencies** between CLI and Provider!
 
@@ -32,28 +35,26 @@ Provider → SDK (reads credentials from keychain or file)
 - ❌ Removed: SDK fork replace directive (no longer needed)
 - ✅ Provider now depends ONLY on the standard SDK (no forks!)
 
-### 2. New Credential Reader (`stackit/internal/core/cli_credentials.go`)
+### 2. New Credential Module (`stackit/internal/core/cli_credentials.go` + `cli_token_refresh.go`)
 
-Secure credential reader with keychain support:
-- **Primary:** Reads from system keychain using `github.com/zalando/go-keyring`
-  - Service: `stackit-cli`
-  - Key: `provider-credentials`
-- **Fallback:** Reads from `~/.stackit/provider-credentials.json` (or `$STACKIT_CLI_CONFIG_DIR/provider-credentials.json`)
-- Parses OAuth credentials (access_token, refresh_token, expiry)
-- Validates credentials exist before use
+Complete credential management matching CLI's storage format:
+- **Profile support:** Default profile or custom profiles (`dev`, `prod`, etc.)
+- **Profile detection:** Config option > `STACKIT_CLI_PROFILE` env var > `~/.config/stackit/cli-profile.txt` > "default"
+- **Keyring storage:** Each credential field stored separately (access_token, refresh_token, user_email, session_expires_at_unix, auth_flow_type)
+- **File storage:** Base64-encoded JSON at `~/.stackit/cli-provider-auth-storage.txt` (or profiles directory)
+- **Token refresh:** Automatic refresh when expired using OAuth2 refresh flow
+- **Write-back:** Updates storage after token refresh for bidirectional sync
 
 ```go
 type ProviderCredentials struct {
-    AccessToken  string    `json:"access_token"`
-    RefreshToken string    `json:"refresh_token"`
-    Expiry       time.Time `json:"expiry"`
-    TokenType    string    `json:"token_type,omitempty"`
+    AccessToken          string
+    RefreshToken         string
+    Email                string
+    SessionExpiresAt     time.Time
+    AuthFlowType         string
+    SourceProfile        string  // Which profile these creds came from
+    StorageLocationUsed  string  // "keyring" or "file"
 }
-
-const (
-    keychainService = "stackit-cli"
-    keychainProviderKey = "provider-credentials"
-)
 ```
 
 **Cross-Platform Keychain Support:**
@@ -63,23 +64,37 @@ const (
 
 ### 3. Updated Provider Logic (`stackit/provider.go`)
 
-Simplified authentication flow:
+Enhanced authentication flow with profile support and token refresh:
 ```go
 if !hasExplicitAuth && cliAuthEnabled {
-    // Read credentials from keychain or file (no CLI code dependency!)
-    // Automatically tries keychain first, falls back to file
-    creds, err := core.ReadCLICredentials()
+    // Get CLI profile from config (new!)
+    var cliProfile string
+    if !providerConfig.CliProfile.IsNull() {
+        cliProfile = providerConfig.CliProfile.ValueString()
+    }
+
+    // Read credentials from keyring or file
+    creds, err := core.ReadCLICredentials(cliProfile)
     if err != nil {
-        // Error: CLI credentials not found in keychain or file
+        // Error handling
         return
     }
 
-    // Use token directly with SDK
+    // Check if token is expired and refresh automatically
+    if err := core.EnsureValidToken(creds); err != nil {
+        // Error: refresh failed
+        return
+    }
+
+    // Use refreshed token with SDK
     sdkConfig.Token = creds.AccessToken
 }
 ```
 
-### 4. Removed Old Adapter
+### 4. Added New Capabilities
+- ✅ **Profile support**: Use different CLI profiles via `cli_profile` config option
+- ✅ **Token refresh**: Automatic token refresh when expired
+- ✅ **Write-back**: Updates credentials in storage after refresh
 - ❌ Deleted: `stackit/internal/core/cli_auth_adapter.go` (no longer needed)
 
 ## How It Works
@@ -95,29 +110,30 @@ if !hasExplicitAuth && cliAuthEnabled {
 2. **Provider reads credentials:**
    ```hcl
    provider "stackit" {
-     cli_auth = true  # Enable CLI authentication
+     cli_auth    = true     # Enable CLI authentication
+     cli_profile = "prod"   # Optional: use specific profile (default: auto-detect)
    }
    ```
-   → Provider reads token from keychain (or file fallback) and uses it with SDK
+   → Provider reads token from keychain (or file fallback), refreshes if expired, and uses it with SDK
 
 3. **No version conflicts!**
    - CLI can use any SDK version it needs
    - Provider can use any SDK version it needs
    - They only share a storage format (keychain keys + JSON structure)
 
-## Token Refresh
+## Token Refresh ✅ IMPLEMENTED!
 
-**Simple approach:** Token refresh is handled by the CLI
-- When token expires, user runs: `stackit auth provider login` again
-- This is similar to how `aws sso login` works
-- Provider always uses the current token from file
+The provider now **automatically refreshes expired tokens**:
+- Checks `session_expires_at_unix` before each use
+- Uses `refresh_token` to get new `access_token` via OAuth2
+- Writes updated credentials back to storage (keyring or file)
+- User doesn't need to manually re-login unless refresh token expires
 
-**Future enhancement:** Provider could implement automatic refresh by:
-1. Checking token expiry
-2. Using refresh_token to get new access_token
-3. Writing updated credentials back to file
-
-But for MVP, manual refresh via CLI is simpler and proven!
+**OAuth2 Refresh Flow:**
+- Endpoint: `https://accounts.stackit.cloud/oauth2/token`
+- Client ID: `stackit-cli-0000-0000-000000000001`
+- Grant type: `refresh_token`
+- Automatic retry with 5-minute safety margin
 
 ## Testing
 
@@ -133,49 +149,45 @@ go build
 go test ./...
 ```
 
-## Next Steps for CLI
+## CLI Storage Format (For Reference)
 
-The CLI needs to store credentials matching the provider's expectations:
+The provider is now compatible with the CLI's exact storage format:
 
 ### Primary Storage: System Keychain
 
 **Keychain Details:**
-- Service: `stackit-cli`
-- Key: `provider-credentials`
-- Value: JSON string with credentials
+- Service: `stackit-cli-provider` (default) or `stackit-cli-provider/{profile}`
+- Separate keys for each field:
+  - `access_token`
+  - `refresh_token`
+  - `user_email`
+  - `session_expires_at_unix` (optional)
+  - `auth_flow_type` (optional)
 
-**Using go-keyring:**
-```go
-import "github.com/zalando/go-keyring"
+### Fallback Storage: Base64-Encoded JSON File
 
-// Store credentials
-credsJSON := `{"access_token": "...", "refresh_token": "...", "expiry": "2025-11-27T10:30:00Z"}`
-err := keyring.Set("stackit-cli", "provider-credentials", credsJSON)
-```
+**Location:**
+- Default profile: `~/.stackit/cli-provider-auth-storage.txt`
+- Custom profile: `~/.stackit/profiles/{profile}/cli-provider-auth-storage.txt`
 
-### Fallback Storage: JSON File
-
-**Location:** `~/.stackit/provider-credentials.json` (or `$STACKIT_CLI_CONFIG_DIR/provider-credentials.json`)
-
-**Format:**
+**Format:** Base64-encoded JSON string
 ```json
 {
   "access_token": "eyJhbGc...",
   "refresh_token": "eyJhbGc...",
-  "expiry": "2025-11-27T10:30:00Z",
-  "token_type": "Bearer"
+  "user_email": "user@example.com",
+  "session_expires_at_unix": "1732633200",
+  "auth_flow_type": "user_token"
 }
 ```
 
-### CLI Implementation Checklist
+### Profile Detection
 
-The CLI's `stackit auth provider login` command should:
-1. ✅ Perform OAuth flow (already implemented in your fork)
-2. ✅ Try to store credentials in system keychain first
-3. ✅ Fall back to JSON file if keychain is unavailable
-4. ✅ Use same keychain service/key names: `stackit-cli` / `provider-credentials`
-5. ✅ Store credentials as JSON string in both keychain and file
-6. ✅ Set appropriate file permissions (0600 - owner read/write only) for file fallback
+Priority order:
+1. Provider config: `cli_profile = "prod"`
+2. Environment variable: `STACKIT_CLI_PROFILE`
+3. Config file: `~/.config/stackit/cli-profile.txt`
+4. Default: `"default"`
 
 ## Benefits
 
@@ -188,6 +200,9 @@ The CLI's `stackit auth provider login` command should:
 ✅ **Simpler testing** - No complex dependency graphs
 ✅ **Easier maintenance** - Changes to CLI don't affect Provider
 ✅ **Graceful fallback** - File storage works when keychain is unavailable
+✅ **Automatic token refresh** - No manual re-login needed for expired tokens
+✅ **Profile support** - Works with multiple CLI profiles
+✅ **Bidirectional sync** - Provider can write refreshed tokens back
 
 ## Comparison to AWS CLI
 

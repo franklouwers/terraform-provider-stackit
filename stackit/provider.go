@@ -160,6 +160,7 @@ type providerModel struct {
 	ServiceEnablementCustomEndpoint types.String `tfsdk:"service_enablement_custom_endpoint"`
 	Experiments                     types.List   `tfsdk:"experiments"`
 	CliAuth                         types.Bool   `tfsdk:"cli_auth"`
+	CliProfile                      types.String `tfsdk:"cli_profile"`
 }
 
 // Schema defines the provider-level schema for configuration data.
@@ -204,6 +205,7 @@ func (p *Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *pro
 		"enable_beta_resources":              "Enable beta resources. Default is false.",
 		"experiments":                        fmt.Sprintf("Enables experiments. These are unstable features without official support. More information can be found in the README. Available Experiments: %v", strings.Join(features.AvailableExperiments, ", ")),
 		"cli_auth":                           "Enable authentication using STACKIT CLI credentials. When enabled, the provider will use credentials from 'stackit auth provider login' if no explicit service account credentials are provided. Default is false.",
+		"cli_profile":                        "STACKIT CLI profile to use for authentication when cli_auth is enabled. If not specified, uses STACKIT_CLI_PROFILE environment variable, then ~/.config/stackit/cli-profile.txt, then 'default'.",
 	}
 
 	resp.Schema = schema.Schema{
@@ -376,6 +378,10 @@ func (p *Provider) Schema(_ context.Context, _ provider.SchemaRequest, resp *pro
 				Optional:    true,
 				Description: descriptions["cli_auth"],
 			},
+			"cli_profile": schema.StringAttribute{
+				Optional:    true,
+				Description: descriptions["cli_profile"],
+			},
 		},
 	}
 }
@@ -475,21 +481,32 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
 
 	if !hasExplicitAuth && cliAuthEnabled {
-		// CLI auth is explicitly enabled - read credentials from CLI storage
-		if !core.IsAuthenticated() {
+		// Get CLI profile from config
+		var cliProfile string
+		if !providerConfig.CliProfile.IsNull() && !providerConfig.CliProfile.IsUnknown() {
+			cliProfile = providerConfig.CliProfile.ValueString()
+		}
+
+		// Check if CLI credentials exist
+		if !core.IsAuthenticated(cliProfile) {
 			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", "CLI authentication is enabled (cli_auth = true) but no CLI credentials found. Please run 'stackit auth provider login' first or provide explicit service account credentials.")
 			return
 		}
 
-		// Read CLI credentials from file
-		creds, err := core.ReadCLICredentials()
+		// Read CLI credentials from keyring or file
+		creds, err := core.ReadCLICredentials(cliProfile)
 		if err != nil {
 			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to read CLI credentials: %v", err))
 			return
 		}
 
+		// Check if token is expired and refresh if needed
+		if err := core.EnsureValidToken(creds); err != nil {
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to refresh expired access token: %v. Please run 'stackit auth provider login' again.", err))
+			return
+		}
+
 		// Use the access token from CLI credentials
-		// Note: Token refresh is handled by the CLI - users should re-run 'stackit auth provider login' if token expires
 		sdkConfig.Token = creds.AccessToken
 	}
 
