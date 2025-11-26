@@ -107,7 +107,7 @@ func ReadCLICredentials(profileOverride string) (*ProviderCredentials, error) {
 	}
 
 	// Try keyring first (primary storage method)
-	creds, err := readFromKeyring(profile)
+	creds, err := readFromKeychain(profile)
 	if err == nil {
 		creds.SourceProfile = profile
 		creds.StorageLocationUsed = "keyring"
