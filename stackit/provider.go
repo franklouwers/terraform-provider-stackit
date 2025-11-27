@@ -479,6 +479,7 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 		(!providerConfig.ServiceAccountKeyPath.IsNull() && !providerConfig.ServiceAccountKeyPath.IsUnknown()) ||
 		(!providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown())
 
+	// Configure CLI provider authentication via SDK if enabled
 	if !hasExplicitAuth && cliAuthEnabled {
 		// Get CLI profile from config
 		var cliProfile string
@@ -486,27 +487,14 @@ func (p *Provider) Configure(ctx context.Context, req provider.ConfigureRequest,
 			cliProfile = providerConfig.CliProfile.ValueString()
 		}
 
-		// Check if CLI credentials exist
-		if !core.IsAuthenticated(cliProfile) {
-			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", "CLI authentication is enabled (cli_auth = true) but no CLI credentials found. Please run 'stackit auth provider login' first or provide explicit service account credentials.")
-			return
-		}
-
-		// Read CLI credentials from keyring or file
-		creds, err := core.ReadCLICredentials(cliProfile)
+		// Apply CLI provider auth configuration option
+		// The SDK will handle credential reading, token refresh, and authentication
+		err := config.WithCLIProviderAuth(cliProfile)(sdkConfig)
 		if err != nil {
-			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to read CLI credentials: %v", err))
+			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider",
+				fmt.Sprintf("%v", err))
 			return
 		}
-
-		// Check if token is expired and refresh if needed
-		if err := core.EnsureValidToken(creds); err != nil {
-			core.LogAndAddError(ctx, &resp.Diagnostics, "Error configuring provider", fmt.Sprintf("Failed to refresh expired access token: %v. Please run 'stackit auth provider login' again.", err))
-			return
-		}
-
-		// Use the access token from CLI credentials
-		sdkConfig.Token = creds.AccessToken
 	}
 
 	// Setup authentication using the configured SDK
